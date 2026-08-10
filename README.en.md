@@ -17,11 +17,39 @@ It discovers the models currently available to a CCH user API key and assigns ea
 
 pi Coding Agent 0.83.0 or newer is required.
 
-## Install and configure
+## Install
 
-```powershell
-pi install ./pi-provider-claude-code-hub
+Install from GitHub:
+
+```bash
+pi install git:github.com/911439925/pi-provider-claude-code-hub
 ```
+
+Try it without adding it to pi's package configuration:
+
+```bash
+pi -e git:github.com/911439925/pi-provider-claude-code-hub
+```
+
+Update or remove it:
+
+```bash
+pi update --extension git:github.com/911439925/pi-provider-claude-code-hub
+pi remove git:github.com/911439925/pi-provider-claude-code-hub
+```
+
+For local development:
+
+```bash
+git clone https://github.com/911439925/pi-provider-claude-code-hub.git
+cd pi-provider-claude-code-hub
+npm install
+pi install .
+```
+
+## Configure
+
+Add a named CCH provider and store its user API key with pi:
 
 ```text
 /cch-provider-add cch

@@ -24,14 +24,32 @@
 
 ## 安装
 
-```powershell
-pi install ./pi-provider-claude-code-hub
+从 GitHub 安装：
+
+```bash
+pi install git:github.com/911439925/pi-provider-claude-code-hub
 ```
 
-临时加载：
+临时试用，不写入 pi 的包配置：
 
-```powershell
-pi -e ./pi-provider-claude-code-hub
+```bash
+pi -e git:github.com/911439925/pi-provider-claude-code-hub
+```
+
+更新或卸载：
+
+```bash
+pi update --extension git:github.com/911439925/pi-provider-claude-code-hub
+pi remove git:github.com/911439925/pi-provider-claude-code-hub
+```
+
+本地开发安装：
+
+```bash
+git clone https://github.com/911439925/pi-provider-claude-code-hub.git
+cd pi-provider-claude-code-hub
+npm install
+pi install .
 ```
 
 ## 使用
