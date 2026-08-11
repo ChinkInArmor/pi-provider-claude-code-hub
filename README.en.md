@@ -22,26 +22,26 @@ pi Coding Agent 0.83.0 or newer is required.
 Install from GitHub:
 
 ```bash
-pi install git:github.com/911439925/pi-provider-claude-code-hub
+pi install git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 Try it without adding it to pi's package configuration:
 
 ```bash
-pi -e git:github.com/911439925/pi-provider-claude-code-hub
+pi -e git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 Update or remove it:
 
 ```bash
-pi update --extension git:github.com/911439925/pi-provider-claude-code-hub
-pi remove git:github.com/911439925/pi-provider-claude-code-hub
+pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
+pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 For local development:
 
 ```bash
-git clone https://github.com/911439925/pi-provider-claude-code-hub.git
+git clone https://github.com/ChinkInArmor/pi-provider-claude-code-hub.git
 cd pi-provider-claude-code-hub
 npm install
 pi install .

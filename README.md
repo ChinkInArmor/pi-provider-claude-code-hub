@@ -27,26 +27,26 @@
 从 GitHub 安装：
 
 ```bash
-pi install git:github.com/911439925/pi-provider-claude-code-hub
+pi install git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 临时试用，不写入 pi 的包配置：
 
 ```bash
-pi -e git:github.com/911439925/pi-provider-claude-code-hub
+pi -e git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 更新或卸载：
 
 ```bash
-pi update --extension git:github.com/911439925/pi-provider-claude-code-hub
-pi remove git:github.com/911439925/pi-provider-claude-code-hub
+pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
+pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 本地开发安装：
 
 ```bash
-git clone https://github.com/911439925/pi-provider-claude-code-hub.git
+git clone https://github.com/ChinkInArmor/pi-provider-claude-code-hub.git
 cd pi-provider-claude-code-hub
 npm install
 pi install .

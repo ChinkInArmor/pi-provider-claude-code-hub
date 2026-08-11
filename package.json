@@ -5,11 +5,11 @@
   "author": "Liu-zy <911439925@qq.com>",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/911439925/pi-provider-claude-code-hub.git"
+    "url": "git+https://github.com/ChinkInArmor/pi-provider-claude-code-hub.git"
   },
-  "homepage": "https://github.com/911439925/pi-provider-claude-code-hub#readme",
+  "homepage": "https://github.com/ChinkInArmor/pi-provider-claude-code-hub#readme",
   "bugs": {
-    "url": "https://github.com/911439925/pi-provider-claude-code-hub/issues"
+    "url": "https://github.com/ChinkInArmor/pi-provider-claude-code-hub/issues"
   },
   "type": "module",
   "license": "MIT",
