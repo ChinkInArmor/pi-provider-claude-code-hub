@@ -882,6 +882,19 @@ interface RefreshContextCompat {
   signal?: AbortSignal;
 }
 
+/**
+ * ModelRegistry gained a targeted refresh in pi-ai 0.84 (getRegisteredNativeProvider
+ * landed there too). 0.83 only has the zero-arg full reload, so feature-detect.
+ */
+interface ModelRegistryCompat {
+  refresh(options?: {
+    providers?: readonly string[];
+    allowNetwork?: boolean;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
+  getRegisteredNativeProvider?(name: string): unknown;
+}
+
 async function refreshProviderModels(
   providerName: string,
   context: RefreshModelsContext
@@ -1545,10 +1558,34 @@ async function persistOverride(
     }
     return true;
   });
+
+  // Refresh so the new overrides take effect immediately without an agent
+  // restart. pi-ai 0.84+ supports a targeted per-provider refresh; 0.83 only
+  // exposes a full reload, which re-runs every provider's refreshModels with
+  // the proper store context (new overrides are picked up from config).
+  const registry = ctx.modelRegistry as ModelRegistryCompat;
+  try {
+    if (registry.getRegisteredNativeProvider) {
+      await registry.refresh?.({
+        providers: [providerName],
+        allowNetwork: true,
+        signal: ctx.signal,
+      });
+    } else {
+      await ctx.modelRegistry.refresh();
+    }
+  } catch (error) {
+    console.warn(
+      `Claude Code Hub: refresh after override save for ${providerName} failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
   ctx.ui.notify(
     isEmpty
-      ? `Cleared override for ${modelKey} (${providerName}).`
-      : `Saved override for ${modelKey} (${providerName}). Model list refreshes on next /model.`,
+      ? `Cleared override for ${modelKey} (${providerName}). Models refreshed.`
+      : `Saved override for ${modelKey} (${providerName}). Models refreshed.`,
     "info"
   );
 }

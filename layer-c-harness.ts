@@ -41,6 +41,7 @@ for (const name of expected) {
 }
 console.log("commands registered:", [...commands.keys()].join(", "));
 
+const refreshLog: string[] = [];
 // Non-TUI fallback: mode "print", hasUI false.
 const ctx = {
   mode: "print",
@@ -48,6 +49,10 @@ const ctx = {
   cwd: process.cwd(),
   signal: new AbortController().signal,
   modelRegistry: {
+    refresh: () => {
+      refreshLog.push("refresh");
+      return Promise.resolve();
+    },
     getProvider(name) {
       if (name === "MyCCH") {
         return {
@@ -114,6 +119,8 @@ const saved = JSON.parse(
 );
 const override = saved.providers.MyCCH.modelOverrides["claude-opus-4"];
 console.log("saved override:", JSON.stringify(override));
+console.log("refresh calls:", JSON.stringify(refreshLog));
+if (!refreshLog.includes("refresh")) throw new Error("persistOverride did not trigger modelRegistry.refresh");
 if (override?.contextWindow !== 256000 || override?.reasoning !== true || override?.maxTokens !== undefined) {
   throw new Error("fallback editor did not persist expected override");
 }
