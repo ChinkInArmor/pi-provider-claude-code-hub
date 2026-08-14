@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { getModels } from "@earendil-works/pi-ai/compat";
@@ -282,4 +285,101 @@ test("rebindCachedModels updates endpoint URLs according to each API", () => {
   });
   assert.equal(models.find((model) => model.id === "claude-model")?.baseUrl, "https://new.example.com");
   assert.equal(models.find((model) => model.id === "gpt-model")?.baseUrl, "https://new.example.com/v1");
+});
+
+async function loadRegisteredProvider() {
+  const agentDir = join(tmpdir(), `cch-test-${process.pid}-${Date.now()}`);
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ data: [{ id: "claude-sonnet-5" }] }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === "object");
+
+  const { default: claudeCodeHubExtension } = await import("./index.ts");
+  mkdirSync(join(agentDir, "extensions"), { recursive: true });
+  writeFileSync(
+    join(agentDir, "extensions", "provider-claude-code-hub.json"),
+    JSON.stringify({
+      providers: { MyCCH: { baseUrl: `http://127.0.0.1:${address.port}`, modelOverrides: {} } },
+      settings: {},
+    })
+  );
+
+  const registrations: Array<{
+    name: string;
+    config: { refreshModels?: (context: unknown) => Promise<unknown> };
+  }> = [];
+  await claudeCodeHubExtension({
+    registerProvider(name: string, config: { refreshModels?: (context: unknown) => Promise<unknown> }) {
+      registrations.push({ name, config });
+    },
+    registerCommand() {},
+    unregisterProvider() {},
+  } as never);
+
+  const provider = registrations.find((entry) => entry.name === "MyCCH");
+  assert.ok(provider?.config.refreshModels, "refreshModels should be registered");
+  return {
+    refreshModels: provider.config.refreshModels,
+    cleanup: async () => {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(agentDir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("refreshModels persists via publish on the pi-ai 0.84+ context", async () => {
+  const { refreshModels, cleanup } = await loadRegisteredProvider();
+  try {
+    let published: unknown;
+    const models = (await refreshModels({
+      credential: { type: "api_key", key: "cch-test-key" },
+      stored: undefined,
+      publish: async (publication: unknown) => {
+        published = publication;
+        return true;
+      },
+      allowNetwork: true,
+      signal: new AbortController().signal,
+    })) as Array<{ id: string }> | undefined;
+    assert.deepEqual(models?.map((model) => (model as { id: string }).id), ["claude-sonnet-5"]);
+    const persist = (published as { persist?: { models?: unknown[]; checkedAt?: number } }).persist;
+    assert.equal(persist?.models?.length, 1);
+    assert.equal(typeof persist?.checkedAt, "number");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("refreshModels persists via store on the pi-ai 0.83 context", async () => {
+  const { refreshModels, cleanup } = await loadRegisteredProvider();
+  try {
+    let written: unknown;
+    const models = (await refreshModels({
+      credential: { type: "api_key", key: "cch-test-key" },
+      store: {
+        read: async () => undefined,
+        write: async (entry: unknown) => {
+          written = entry;
+        },
+      },
+      allowNetwork: true,
+      signal: new AbortController().signal,
+    })) as Array<{ id: string }> | undefined;
+    assert.deepEqual(models?.map((model) => (model as { id: string }).id), ["claude-sonnet-5"]);
+    const entry = written as { models?: unknown[]; checkedAt?: number };
+    assert.equal(entry?.models?.length, 1);
+    assert.equal(typeof entry?.checkedAt, "number");
+  } finally {
+    await cleanup();
+  }
 });

@@ -10,6 +10,7 @@ import {
   type Api,
   type Model,
   type ModelThinkingLevel,
+  type ModelsStoreEntry,
   type RefreshModelsContext,
   type ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
@@ -640,6 +641,27 @@ function mergeDiscoveryWithCache(params: {
   return [...fresh, ...retained].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * RefreshModelsContext changed between pi-ai 0.83 and 0.84:
+ * - 0.83: async `store: ProviderModelsStore` (read()/write())
+ * - 0.84: synchronous `stored` snapshot plus generation-checked `publish()`
+ * The provider-scoped store field was removed in 0.84, so detect at runtime.
+ */
+interface RefreshContextCompat {
+  credential?: { type: string; key?: string };
+  store?: {
+    read(): Promise<ModelsStoreEntry | undefined>;
+    write(entry: ModelsStoreEntry): Promise<void>;
+  };
+  stored?: Readonly<ModelsStoreEntry>;
+  publish?: (publication: {
+    persist?: ModelsStoreEntry | null;
+    update?: () => void;
+  }) => Promise<boolean>;
+  allowNetwork: boolean;
+  signal?: AbortSignal;
+}
+
 async function refreshProviderModels(
   providerName: string,
   context: RefreshModelsContext
@@ -647,7 +669,8 @@ async function refreshProviderModels(
   const entry = readConfig().providers[providerName];
   if (!entry) return [];
 
-  const cached = await context.store.read();
+  const compat = context as unknown as RefreshContextCompat;
+  const cached = compat.store ? await compat.store.read() : compat.stored;
   const cachedModels = rebindCachedModels({
     models: (cached?.models ?? []) as unknown as ProviderModelConfig[],
     baseUrl: entry.baseUrl,
@@ -678,10 +701,15 @@ async function refreshProviderModels(
       baseUrl: entry.baseUrl,
       modelOverrides: entry.modelOverrides,
     });
-    await context.store.write({
+    const entry_ = {
       models: models as unknown as Model<Api>[],
       checkedAt: Date.now(),
-    });
+    } satisfies ModelsStoreEntry;
+    if (compat.store) {
+      await compat.store.write(entry_);
+    } else if (compat.publish) {
+      await compat.publish({ persist: entry_ });
+    }
     return models;
   } catch (error) {
     if (error instanceof CCHError && error.code === "aborted") return cachedModels;
