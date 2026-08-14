@@ -19,10 +19,22 @@
 
 ## 要求
 
-- pi Coding Agent `0.83.0` 或更高版本。
+- pi Coding Agent `0.83.0` 或更高版本（同时兼容 0.83 的 provider store 缓存协议，以及 0.84 起引入的 `stored`/`publish` 模型仓库协议）。
 - Claude Code Hub 提供用户 API Key 可访问的模型与推理端点。
 
 ## 安装
+
+从 npm 安装：
+
+```bash
+pi install npm:pi-provider-claude-code-hub
+```
+
+推荐钉住具体版本（生产环境更可控）：
+
+```bash
+pi install npm:pi-provider-claude-code-hub@0.1.1
+```
 
 从 GitHub 安装：
 
@@ -36,13 +48,6 @@ pi install git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 pi -e git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
-更新或卸载：
-
-```bash
-pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
-pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
-```
-
 本地开发安装：
 
 ```bash
@@ -50,6 +55,33 @@ git clone https://github.com/ChinkInArmor/pi-provider-claude-code-hub.git
 cd pi-provider-claude-code-hub
 npm install
 pi install .
+```
+
+## 更新
+
+不带版本号的 npm 安装会跟随 `pi update --extensions` 自动更新：
+
+```bash
+pi update --extensions
+```
+
+钉住版本号的安装（`npm:pi-provider-claude-code-hub@0.1.1`）会被包更新跳过，需要显式安装新版本：
+
+```bash
+pi install npm:pi-provider-claude-code-hub@<新版本>
+```
+
+git 安装的更新：
+
+```bash
+pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
+```
+
+卸载：
+
+```bash
+pi remove npm:pi-provider-claude-code-hub
+pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 ## 使用

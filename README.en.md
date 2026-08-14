@@ -15,9 +15,21 @@ It discovers the models currently available to a CCH user API key and assigns ea
 - Metadata enrichment from pi's built-in model catalogs.
 - Optional metadata overrides for private model aliases.
 
-pi Coding Agent 0.83.0 or newer is required.
+pi Coding Agent 0.83.0 or newer is required (compatible with both the 0.83 provider store cache protocol and the `stored`/`publish` model repository protocol introduced in 0.84).
 
 ## Install
+
+From npm:
+
+```bash
+pi install npm:pi-provider-claude-code-hub
+```
+
+Pin a specific version for production installs:
+
+```bash
+pi install npm:pi-provider-claude-code-hub@0.1.1
+```
 
 Install from GitHub:
 
@@ -31,13 +43,6 @@ Try it without adding it to pi's package configuration:
 pi -e git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
-Update or remove it:
-
-```bash
-pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
-pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
-```
-
 For local development:
 
 ```bash
@@ -45,6 +50,33 @@ git clone https://github.com/ChinkInArmor/pi-provider-claude-code-hub.git
 cd pi-provider-claude-code-hub
 npm install
 pi install .
+```
+
+## Updating
+
+Unpinned npm installs are updated automatically:
+
+```bash
+pi update --extensions
+```
+
+Pinned installs (`npm:pi-provider-claude-code-hub@0.1.1`) are skipped by package updates; install the new version explicitly:
+
+```bash
+pi install npm:pi-provider-claude-code-hub@<new-version>
+```
+
+Git installs:
+
+```bash
+pi update --extension git:github.com/ChinkInArmor/pi-provider-claude-code-hub
+```
+
+Remove:
+
+```bash
+pi remove npm:pi-provider-claude-code-hub
+pi remove git:github.com/ChinkInArmor/pi-provider-claude-code-hub
 ```
 
 ## Configure
