@@ -13,12 +13,7 @@
   },
   "type": "module",
   "license": "MIT",
-  "files": [
-    "index.ts",
-    "README.md",
-    "README.en.md",
-    "LICENSE"
-  ],
+  "files": [ "index.ts", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE" ],
   "keywords": [
     "pi-package",
     "claude-code-hub",
@@ -44,3 +39,5 @@
     "typescript": "^7.0.2"
   }
 }
+
+
