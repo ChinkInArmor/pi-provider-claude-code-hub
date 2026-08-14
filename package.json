@@ -1,6 +1,6 @@
 {
   "name": "pi-provider-claude-code-hub",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Dynamic pi provider extension for self-hosted Claude Code Hub gateways",
   "author": "Liu-zy <911439925@qq.com>",
   "repository": {
@@ -13,7 +13,13 @@
   },
   "type": "module",
   "license": "MIT",
-  "files": [ "index.ts", "README.md", "README.en.md", "CHANGELOG.md", "LICENSE" ],
+  "files": [
+    "index.ts",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "keywords": [
     "pi-package",
     "claude-code-hub",
@@ -39,5 +45,3 @@
     "typescript": "^7.0.2"
   }
 }
-
-
