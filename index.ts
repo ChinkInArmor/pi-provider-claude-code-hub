@@ -1563,16 +1563,44 @@ async function persistOverride(
   // restart. pi-ai 0.84+ supports a targeted per-provider refresh; 0.83 only
   // exposes a full reload, which re-runs every provider's refreshModels with
   // the proper store context (new overrides are picked up from config).
+  //
+  // A pi-ai 0.84 quirk can make the very first refresh of a provider skip its
+  // network phase (credential resolve races on first read), leaving the model
+  // list empty. Refresh is idempotent and the retry always succeeds, so verify
+  // the result and retry once when the provider still has no models.
   const registry = ctx.modelRegistry as ModelRegistryCompat;
-  try {
+  const doRefresh = async (): Promise<boolean> => {
     if (registry.getRegisteredNativeProvider) {
-      await registry.refresh?.({
+      const result = (await registry.refresh?.({
         providers: [providerName],
         allowNetwork: true,
         signal: ctx.signal,
-      });
+      })) as { errors?: ReadonlyMap<string, Error> } | undefined;
+      if (result?.errors?.has(providerName)) {
+        const error = result.errors.get(providerName);
+        console.warn(
+          `Claude Code Hub: refresh after override save for ${providerName} failed: ${error?.message}`
+        );
+        return false;
+      }
     } else {
       await ctx.modelRegistry.refresh();
+    }
+    return true;
+  };
+
+  let refreshed = false;
+  try {
+    refreshed = await doRefresh();
+    if (refreshed && registry.getRegisteredNativeProvider) {
+      // Verify the refresh actually produced models; retry once if not.
+      const models = ctx.modelRegistry.getProvider(providerName)?.getModels() ?? [];
+      if (models.length === 0) {
+        console.warn(
+          `Claude Code Hub: provider ${providerName} has no models after refresh; retrying once.`
+        );
+        refreshed = await doRefresh();
+      }
     }
   } catch (error) {
     console.warn(
@@ -1580,13 +1608,15 @@ async function persistOverride(
         error instanceof Error ? error.message : String(error)
       }`
     );
+    refreshed = false;
   }
 
+  const refreshedNote = refreshed ? " Models refreshed." : " Refresh failed; restart pi to apply.";
   ctx.ui.notify(
     isEmpty
-      ? `Cleared override for ${modelKey} (${providerName}). Models refreshed.`
-      : `Saved override for ${modelKey} (${providerName}). Models refreshed.`,
-    "info"
+      ? `Cleared override for ${modelKey} (${providerName}).${refreshedNote}`
+      : `Saved override for ${modelKey} (${providerName}).${refreshedNote}`,
+    refreshed ? "info" : "warning"
   );
 }
 
