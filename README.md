@@ -15,6 +15,8 @@
 - 使用 pi 内置模型目录补全 reasoning、上下文窗口、图像、thinking、兼容参数和价格。
 - 同一模型出现在多个协议时，优先使用其原生 Provider/API 元数据。
 - 支持无法识别的自定义模型别名及可选元数据覆盖。
+- 模型覆盖支持 glob 规则（`claude-*`、`*` 兜底、`?`），一条规则覆盖整类模型。
+- 交互式命令 `/cch-provider-models` 与 `/cch-model-override`，无需手改 JSON。
 - 不读取或修改 `auth.json`，不把 API Key 写入扩展配置。
 
 ## 要求
@@ -129,6 +131,8 @@ cch/deepseek-v4-pro
 | `/cch-provider-add [name]` | 添加并立即注册一个 CCH Provider。 |
 | `/cch-provider-remove [name]` | 删除 Provider 配置；如果仍有凭据，必须先运行 `/logout`。 |
 | `/cch-provider-list` | 查看地址、认证状态、覆盖数量和运行状态。 |
+| `/cch-provider-models [provider]` | 查看模型表格：有效参数、生效规则与来源标注；Enter 直接进入编辑。 |
+| `/cch-model-override [provider] [model|pattern]` | 交互式编辑模型覆盖（支持 glob 规则），保存后自动生效。 |
 
 ## 模型发现
 
@@ -208,6 +212,32 @@ API Key 不在此文件中，由 pi CredentialStore 管理。
 ```
 
 未知别名仍可使用，默认按文本输入、非 reasoning、128K 上下文、16K 最大输出和零成本注册。
+
+### 规则匹配
+
+`modelOverrides` 的键可以是精确模型 ID，也可以是 glob 规则：
+
+```json
+{
+  "modelOverrides": {
+    "claude-*": { "maxTokens": 64000, "contextWindow": 200000 },
+    "claude-sonnet-*": { "reasoning": true },
+    "*": { "input": ["text", "image"] }
+  }
+}
+```
+
+优先级：**精确 ID > 通配符更少的规则 > 字面前缀更长的规则 > `*` 兜底**。多条规则同时匹配时，只有最具体的一条生效（不会叠加）。未知模型匹配不到任何规则时使用默认值。
+
+### 交互式编辑（推荐）
+
+```text
+/cch-provider-models cch        # 表格总览，Enter 跳到编辑
+/cch-model-override cch         # 选择模型或输入 pattern
+/cch-model-override cch claude-*  # 直接编辑一个规则
+```
+
+编辑界面提供常用字段（名称、上下文窗口、最大输出、reasoning、输入类型）与折叠的高级字段（cost、thinkingLevelMap、compat，以校验 JSON 编辑）。保存后写入配置并提示下次刷新生效。
 
 ## 安全说明
 

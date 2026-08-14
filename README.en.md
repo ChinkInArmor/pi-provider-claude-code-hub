@@ -14,6 +14,8 @@ It discovers the models currently available to a CCH user API key and assigns ea
 - A successful empty catalog removes stale models for that protocol.
 - Metadata enrichment from pi's built-in model catalogs.
 - Optional metadata overrides for private model aliases.
+- Glob-rule overrides (`claude-*`, `*` fallback, `?`) — one rule covers a whole model class.
+- Interactive `/cch-provider-models` and `/cch-model-override` commands.
 
 pi Coding Agent 0.83.0 or newer is required (compatible with both the 0.83 provider store cache protocol and the `stored`/`publish` model repository protocol introduced in 0.84).
 
@@ -103,6 +105,8 @@ The extension accepts a CCH root URL or a URL ending in `/v1`, `/v1/models`, `/v
 | `/cch-provider-add [name]` | Add and register a CCH provider. |
 | `/cch-provider-remove [name]` | Remove its configuration; `/logout` is required first when a credential exists. |
 | `/cch-provider-list` | Show configured providers and authentication status. |
+| `/cch-provider-models [provider]` | Effective parameters per model with rule/source annotations; Enter edits a model. |
+| `/cch-model-override [provider] [model|pattern]` | Interactively edit a model override (glob patterns supported). |
 
 ## Discovery
 
@@ -116,7 +120,30 @@ The extension queries these user-scoped endpoints in parallel:
 
 All requests use the same user key in `x-api-key`. CCH's management API and admin token are not used.
 
-Configuration is stored in `<agentDir>/extensions/provider-claude-code-hub.json`; credentials remain in pi's CredentialStore. See [README.md](README.md) for model override and cache behavior details.
+Configuration is stored in `<agentDir>/extensions/provider-claude-code-hub.json`; credentials remain in pi's CredentialStore.
+
+### Override rules
+
+`modelOverrides` keys can be exact model IDs or glob patterns (`*`, `?`):
+
+```json
+{
+  "modelOverrides": {
+    "claude-*": { "maxTokens": 64000, "contextWindow": 200000 },
+    "claude-sonnet-*": { "reasoning": true },
+    "*": { "input": ["text", "image"] }
+  }
+}
+```
+
+Priority: **exact ID > fewer wildcards > longer literal prefix > `*` fallback**. Only the single most specific matching rule applies (rules do not stack). Prefer the interactive editors over hand-editing:
+
+```text
+/cch-provider-models cch          # overview table; Enter edits a model
+/cch-model-override cch claude-*  # edit a rule
+```
+
+See [README.md](README.md) for cache behavior details.
 
 ## Project relationship
 
