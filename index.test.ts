@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { getModels } from "@earendil-works/pi-ai/compat";
+import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import {
   buildCCHModels,
   discoverCCHCatalog,
@@ -13,6 +14,8 @@ import {
   parseCCHModelsResponse,
   rebindCachedModels,
   resolveApiBaseUrl,
+  resolveModelOverride,
+  matchModelPattern,
 } from "./index.ts";
 
 test("normalizeCCHBaseUrl accepts roots and strips API suffixes", () => {
@@ -253,6 +256,113 @@ test("buildCCHModels applies explicit alias overrides", () => {
   assert.deepEqual(model.input, ["text", "image"]);
   assert.deepEqual(model.cost, { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 });
   assert.deepEqual(model.compat, { forceAdaptiveThinking: true });
+});
+
+test("matchModelPattern supports exact IDs, * and ? wildcards", () => {
+  assert.equal(matchModelPattern("claude-sonnet-5", "claude-sonnet-5"), true);
+  assert.equal(matchModelPattern("claude-sonnet-5", "claude-sonnet-4"), false);
+  assert.equal(matchModelPattern("claude-*", "claude-sonnet-5"), true);
+  assert.equal(matchModelPattern("claude-*", "gpt-5"), false);
+  assert.equal(matchModelPattern("*", "anything-here"), true);
+  assert.equal(matchModelPattern("claude-sonnet-?", "claude-sonnet-5"), true);
+  assert.equal(matchModelPattern("claude-sonnet-?", "claude-sonnet-5-2025"), false);
+  assert.equal(matchModelPattern("claude-*-latest", "claude-sonnet-5-latest"), true);
+  assert.equal(matchModelPattern("a.b", "a.b"), true);
+  assert.equal(matchModelPattern("a.b", "aXb"), false);
+});
+
+test("resolveModelOverride prefers exact ID, then more specific patterns, then *", () => {
+  const overrides = {
+    "claude-*": { maxTokens: 32_000 },
+    "claude-sonnet-*": { contextWindow: 200_000 },
+    "claude-sonnet-5": { reasoning: true },
+    "*": { name: "catch-all" },
+  };
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-5")?.reasoning, true);
+  // exact match wins wholesale: the claude-sonnet-* rule's contextWindow
+  // and claude-*'s maxTokens do not leak through
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-5")?.contextWindow, undefined);
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-5")?.maxTokens, undefined);
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-7")?.contextWindow, 200_000);
+  // claude-sonnet-* is more specific than claude-*, so maxTokens stays unset;
+  // the global * fallback only applies when no other pattern matches
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-7")?.maxTokens, undefined);
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-7")?.name, undefined);
+  assert.equal(resolveModelOverride(overrides, "claude-opus-4")?.maxTokens, 32_000);
+  assert.equal(resolveModelOverride(overrides, "claude-opus-4")?.name, undefined);
+  assert.equal(resolveModelOverride(overrides, "gpt-5")?.name, "catch-all");
+  assert.equal(resolveModelOverride(overrides, "gpt-5")?.maxTokens, undefined);
+  assert.equal(resolveModelOverride(overrides, "nope")?.maxTokens, undefined);
+});
+
+test("resolveModelOverride uses literal prefix length as tie-breaker", () => {
+  const overrides = {
+    "claude-*": { name: "broad" },
+    "claude-sonnet-*": { name: "narrow" },
+  };
+  assert.equal(resolveModelOverride(overrides, "claude-sonnet-9")?.name, "narrow");
+  assert.equal(resolveModelOverride(overrides, "claude-opus-4")?.name, "broad");
+});
+
+test("resolveModelOverride handles ties by declaration order and empty inputs", () => {
+  const overrides = {
+    "a-*": { name: "first" },
+    "*-a": { name: "second" },
+  };
+  assert.equal(resolveModelOverride(overrides, "a-a")?.name, "first");
+  assert.equal(resolveModelOverride(undefined, "x"), undefined);
+  assert.equal(resolveModelOverride({}, "x"), undefined);
+});
+
+test("buildCCHModels applies rule-based overrides and exact overrides", () => {
+  const models = buildCCHModels({
+    baseUrl: "https://hub.example.com",
+    apiModels: [
+      { id: "claude-sonnet-5", api: "anthropic-messages" },
+      { id: "claude-opus-4", api: "anthropic-messages" },
+      { id: "custom-model", api: "openai-responses" },
+    ],
+    modelOverrides: {
+      "claude-*": { maxTokens: 64_000, contextWindow: 200_000 },
+      "claude-sonnet-5": { reasoning: true },
+      "*": { input: ["text", "image"] },
+    },
+  });
+  const sonnet = models.find((model) => model.id === "claude-sonnet-5");
+  const opus = models.find((model) => model.id === "claude-opus-4");
+  const custom = models.find((model) => model.id === "custom-model");
+  assert.equal(sonnet?.reasoning, true);
+  // exact override wins wholesale: claude-* rule does not apply to sonnet-5,
+  // and built-in catalog metadata still fills contextWindow
+  assert.equal(sonnet?.maxTokens, 128_000);
+  assert.equal(sonnet?.contextWindow, 1_000_000);
+  assert.equal(opus?.maxTokens, 64_000);
+  assert.equal(opus?.contextWindow, 200_000);
+  assert.equal(custom?.maxTokens, 16_384);
+  assert.deepEqual(custom?.input, ["text", "image"]);
+});
+
+test("rebindCachedModels applies rule-based overrides to cached models", () => {
+  const cached: ProviderModelConfig[] = [
+    {
+      id: "claude-sonnet-5",
+      name: "Claude",
+      api: "anthropic-messages",
+      baseUrl: "https://old.example.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    },
+  ];
+  const models = rebindCachedModels({
+    models: cached,
+    baseUrl: "https://new.example.com/v1",
+    modelOverrides: { "claude-*": { maxTokens: 32_000 } },
+  });
+  assert.equal(models[0].maxTokens, 32_000);
+  assert.equal(models[0].baseUrl, "https://new.example.com");
 });
 
 test("rebindCachedModels updates endpoint URLs according to each API", () => {

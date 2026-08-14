@@ -98,6 +98,203 @@ interface CCHModelOverride {
   compat?: Model<Api>["compat"];
 }
 
+/**
+ * A model-override key may be an exact model ID or a glob pattern.
+ * Supported wildcards: `*` (any run of characters) and `?` (exactly one).
+ * Keys are matched against raw model IDs (patterns are case-sensitive).
+ */
+export function matchModelPattern(pattern: string, id: string): boolean {
+  if (!pattern) return false;
+  if (pattern === "*") return true;
+  if (!pattern.includes("*") && !pattern.includes("?")) return pattern === id;
+  const expression = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp(`^${expression}$`).test(id);
+}
+
+/**
+ * Override-key priority score: fewer wildcards first, then longer literal
+ * prefix (more specific). Lower score wins. `*` alone scores highest of all
+ * single-wildcard patterns, making it the global fallback.
+ */
+export function patternSpecificity(pattern: string): number {
+  let wildcardCount = 0;
+  let literalLength = 0;
+  for (const char of pattern) {
+    if (char === "*" || char === "?") wildcardCount++;
+    else literalLength++;
+  }
+  return wildcardCount * 10_000 - literalLength;
+}
+
+/**
+ * Resolve the override that applies to a model ID.
+ * Priority: exact ID > pattern with fewer wildcards > global `*`.
+ * Ties are broken by declaration order (earlier entry wins).
+ */
+export function resolveModelOverride(
+  overrides: Record<string, CCHModelOverride> | undefined,
+  id: string
+): CCHModelOverride | undefined {
+  if (!overrides) return undefined;
+  const keys = Object.keys(overrides);
+  if (keys.length === 0) return undefined;
+
+  let best: { key: string; specificity: number } | undefined;
+  for (const key of keys) {
+    if (!matchModelPattern(key, id)) continue;
+    const specificity = patternSpecificity(key);
+    if (!best || specificity < best.specificity) {
+      best = { key, specificity };
+    }
+  }
+  return best ? overrides[best.key] : undefined;
+}
+
+/**
+ * Fields that can be overridden, with per-field kind for form/table rendering.
+ * Advanced fields are edited as validated JSON text.
+ */
+export const OVERRIDE_FIELDS = [
+  "name",
+  "contextWindow",
+  "maxTokens",
+  "reasoning",
+  "input",
+  "thinkingLevelMap",
+  "cost",
+  "compat",
+] as const;
+
+export type OverrideField = (typeof OVERRIDE_FIELDS)[number];
+
+export const OVERRIDE_FIELD_LABELS: Record<OverrideField, string> = {
+  name: "Name",
+  contextWindow: "Context window",
+  maxTokens: "Max tokens",
+  reasoning: "Reasoning",
+  input: "Input types",
+  thinkingLevelMap: "Thinking level map",
+  cost: "Cost",
+  compat: "Compat",
+};
+
+/** Whether a field is part of the compact basic form vs the collapsed advanced JSON section. */
+export function isBasicField(field: OverrideField): boolean {
+  return field === "name" || field === "contextWindow" || field === "maxTokens" || field === "reasoning" || field === "input";
+}
+
+/** Human-readable current value of a field in an override. */
+export function formatOverrideValue(field: OverrideField, override: CCHModelOverride): string {
+  const value = override[field];
+  if (value === undefined) return "(unset)";
+  switch (field) {
+    case "name":
+      return String(value);
+    case "contextWindow":
+    case "maxTokens":
+      return String(value);
+    case "reasoning":
+      return value ? "on" : "off";
+    case "input":
+      return (value as string[]).join(", ");
+    case "thinkingLevelMap":
+      return JSON.stringify(value);
+    case "cost":
+      return JSON.stringify(value);
+    case "compat":
+      return JSON.stringify(value);
+  }
+}
+
+/**
+ * Which layer contributed each effective field of a final model config.
+ * Used by the overview table to annotate values that differ from the catalog.
+ */
+export function annotateModelSources(params: {
+  model: ProviderModelConfig;
+  catalog?: Model<Api>;
+  override?: CCHModelOverride;
+}): Partial<Record<OverrideField, "catalog" | "override" | "default">> {
+  const { model, catalog, override } = params;
+  const sources: Partial<Record<OverrideField, "catalog" | "override" | "default">> = {};
+
+  const annotate = (
+    field: OverrideField,
+    effective: unknown,
+    catalogValue: unknown,
+    defaultValue: unknown
+  ) => {
+    if (override && override[field] !== undefined) {
+      sources[field] = "override";
+    } else if (catalog && catalogValue !== undefined && !deepEqual(effective, catalogValue)) {
+      sources[field] = "catalog";
+    } else if (!deepEqual(effective, defaultValue)) {
+      sources[field] = "default";
+    }
+  };
+
+  annotate("name", model.name, catalog?.name, model.id);
+  annotate("contextWindow", model.contextWindow, catalog?.contextWindow, 128_000);
+  annotate("maxTokens", model.maxTokens, catalog?.maxTokens, 16_384);
+  annotate("reasoning", model.reasoning, catalog?.reasoning, false);
+  annotate("input", model.input, catalog?.input, ["text"]);
+  annotate("thinkingLevelMap", model.thinkingLevelMap, catalog?.thinkingLevelMap, undefined);
+  annotate("cost", model.cost, catalog?.cost, DEFAULT_COST);
+  annotate("compat", model.compat, catalog?.compat, undefined);
+
+  return sources;
+}
+
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== (b as unknown[]).length) return false;
+    return a.every((item, index) => deepEqual(item, (b as unknown[])[index]));
+  }
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key) => deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])
+  );
+}
+
+/** Build the effective ProviderModelConfig for one model with a given override + catalog. */
+export function buildEffectiveModel(params: {
+  baseUrl: string;
+  entry: CCHModelEntry;
+  override?: CCHModelOverride;
+  catalog?: Model<Api>;
+}): ProviderModelConfig {
+  const { baseUrl, entry, override = {}, catalog } = params;
+  const sourceCompat = catalog?.api === entry.api ? catalog.compat : undefined;
+  const compat = sourceCompat || override.compat
+    ? {
+        ...(sourceCompat as Record<string, unknown> | undefined),
+        ...(override.compat as Record<string, unknown> | undefined),
+      }
+    : undefined;
+  return {
+    id: entry.id,
+    name: override.name ?? entry.displayName ?? catalog?.name ?? entry.id,
+    api: entry.api,
+    baseUrl: resolveApiBaseUrl(normalizeCCHBaseUrl(baseUrl), entry.api),
+    reasoning: override.reasoning ?? catalog?.reasoning ?? false,
+    thinkingLevelMap:
+      override.thinkingLevelMap ?? (catalog?.thinkingLevelMap as ThinkingLevelMap | undefined),
+    input: override.input ?? catalog?.input ?? ["text"],
+    cost: mergeCost(catalog?.cost, override.cost),
+    contextWindow: override.contextWindow ?? catalog?.contextWindow ?? 128_000,
+    maxTokens: override.maxTokens ?? catalog?.maxTokens ?? 16_384,
+    compat: compat as Model<Api>["compat"],
+  };
+}
+
 interface ProviderEntry {
   baseUrl: string;
   modelOverrides: Record<string, CCHModelOverride>;
@@ -406,7 +603,7 @@ export function buildCCHModels(params: {
 
   return selectUniqueEntries(params.apiModels).map((entry) => {
     const enriched = findEnrichment(entry);
-    const override = overrides[entry.id] ?? {};
+    const override = resolveModelOverride(overrides, entry.id) ?? {};
     const source = enriched?.model;
     const sourceCompat = source?.api === entry.api ? source.compat : undefined;
     const compat =
@@ -592,7 +789,7 @@ export function rebindCachedModels(params: {
     )
     .map((model) => {
       const api = model.api as CCHModelApi;
-      const override = modelOverrides[model.id];
+      const override = resolveModelOverride(modelOverrides, model.id);
       const rebound: ProviderModelConfig = {
         ...model,
         api,
