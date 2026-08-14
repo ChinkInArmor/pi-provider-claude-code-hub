@@ -17,9 +17,12 @@ import {
 import { getModels, getProviders, type BuiltinProvider } from "@earendil-works/pi-ai/compat";
 import {
   getAgentDir,
+  getSelectListTheme,
   type ExtensionAPI,
+  type ExtensionCommandContext,
   type ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -139,18 +142,29 @@ export function resolveModelOverride(
   id: string
 ): CCHModelOverride | undefined {
   if (!overrides) return undefined;
-  const keys = Object.keys(overrides);
-  if (keys.length === 0) return undefined;
+  const key = findAppliedOverrideKey(overrides, id);
+  return key ? overrides[key] : undefined;
+}
 
+/**
+ * The override key (exact ID or pattern) that wins for a model ID, using the
+ * same priority rules as resolveModelOverride. Returns undefined when no rule
+ * matches.
+ */
+export function findAppliedOverrideKey(
+  overrides: Record<string, CCHModelOverride> | undefined,
+  id: string
+): string | undefined {
+  if (!overrides) return undefined;
   let best: { key: string; specificity: number } | undefined;
-  for (const key of keys) {
+  for (const key of Object.keys(overrides)) {
     if (!matchModelPattern(key, id)) continue;
     const specificity = patternSpecificity(key);
     if (!best || specificity < best.specificity) {
       best = { key, specificity };
     }
   }
-  return best ? overrides[best.key] : undefined;
+  return best?.key;
 }
 
 /**
@@ -212,6 +226,8 @@ export function formatOverrideValue(field: OverrideField, override: CCHModelOver
 /**
  * Which layer contributed each effective field of a final model config.
  * Used by the overview table to annotate values that differ from the catalog.
+ * When `catalog` is unavailable (registry models are already merged), only
+ * override-applied fields are annotated.
  */
 export function annotateModelSources(params: {
   model: ProviderModelConfig;
@@ -220,6 +236,13 @@ export function annotateModelSources(params: {
 }): Partial<Record<OverrideField, "catalog" | "override" | "default">> {
   const { model, catalog, override } = params;
   const sources: Partial<Record<OverrideField, "catalog" | "override" | "default">> = {};
+
+  if (!catalog) {
+    for (const field of OVERRIDE_FIELDS) {
+      if (override && override[field] !== undefined) sources[field] = "override";
+    }
+    return sources;
+  }
 
   const annotate = (
     field: OverrideField,
@@ -934,6 +957,173 @@ function validProviderName(name: string): boolean {
   return name.length > 0 && !/[\s/\\]/.test(name);
 }
 
+/* --------------------------------------------------------------------------
+ * Layer C: interactive model override editing
+ * -------------------------------------------------------------------------- */
+
+/** Parse raw JSON text into a field value; returns error message on failure. */
+export function parseOverrideJson(
+  field: OverrideField,
+  raw: string
+): { value: unknown; error?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { value: undefined, error: `Invalid JSON for ${OVERRIDE_FIELD_LABELS[field]}.` };
+  }
+  switch (field) {
+    case "reasoning":
+      if (typeof parsed !== "boolean") {
+        return { value: undefined, error: `${OVERRIDE_FIELD_LABELS[field]} must be true or false.` };
+      }
+      break;
+    case "contextWindow":
+    case "maxTokens":
+      if (typeof parsed !== "number" || !Number.isFinite(parsed) || parsed <= 0) {
+        return { value: undefined, error: `${OVERRIDE_FIELD_LABELS[field]} must be a positive number.` };
+      }
+      break;
+    case "input": {
+      const valid = Array.isArray(parsed) && parsed.every((v) => v === "text" || v === "image");
+      if (!valid) {
+        return { value: undefined, error: "Input types must be a JSON array of \"text\" and/or \"image\"." };
+      }
+      break;
+    }
+    default:
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {
+          value: undefined,
+          error: `${OVERRIDE_FIELD_LABELS[field]} must be a JSON object (or null to clear it).`,
+        };
+      }
+  }
+  return { value: parsed };
+}
+
+/** Serialize an override field for text editing. Empty string means "clear". */
+export function serializeOverrideField(field: OverrideField, override: CCHModelOverride): string {
+  const value = override[field];
+  if (value === undefined) return "(unset)";
+  switch (field) {
+    case "name":
+      return String(value);
+    case "contextWindow":
+    case "maxTokens":
+      return String(value);
+    case "reasoning":
+      return value ? "true" : "false";
+    case "input":
+      return JSON.stringify(value);
+    default:
+      return JSON.stringify(value);
+  }
+}
+
+/**
+ * Apply a typed value to an override copy. Returns a new override object.
+ * Passing undefined clears the field.
+ */
+export function setOverrideField(
+  override: CCHModelOverride,
+  field: OverrideField,
+  value: unknown
+): CCHModelOverride {
+  const next = { ...override };
+  if (value === undefined) {
+    delete next[field];
+    return next;
+  }
+  switch (field) {
+    case "name":
+      next.name = String(value);
+      break;
+    case "contextWindow":
+      next.contextWindow = Number(value);
+      break;
+    case "maxTokens":
+      next.maxTokens = Number(value);
+      break;
+    case "reasoning":
+      next.reasoning = Boolean(value);
+      break;
+    case "input":
+      next.input = value as ("text" | "image")[];
+      break;
+    case "thinkingLevelMap":
+      next.thinkingLevelMap = value as CCHModelOverride["thinkingLevelMap"];
+      break;
+    case "cost":
+      next.cost = value as CCHModelOverride["cost"];
+      break;
+    case "compat":
+      next.compat = value as CCHModelOverride["compat"];
+      break;
+  }
+  return next;
+}
+
+/** One row of the /cch-provider-models overview table. */
+export interface ModelTableRow {
+  id: string;
+  api: CCHModelApi;
+  /** Effective values. */
+  name: string;
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+  input: string[];
+  /** Which layer produced each annotated field (only fields differing from catalog). */
+  sources: Partial<Record<OverrideField, "catalog" | "override" | "default">>;
+  /** The override key that applied (exact ID or pattern), if any. */
+  appliedKey?: string;
+}
+
+/**
+ * Build table rows for all currently known models of a provider.
+ * `registryModels` are the live ProviderModelConfig[] from the model registry.
+ */
+export function buildModelTableRows(params: {
+  registryModels: ProviderModelConfig[];
+  modelOverrides: Record<string, CCHModelOverride>;
+}): ModelTableRow[] {
+  const { registryModels, modelOverrides } = params;
+
+  const rows: ModelTableRow[] = registryModels.map((model) => {
+    const override = resolveModelOverride(modelOverrides, model.id);
+    const appliedKey = findAppliedOverrideKey(modelOverrides, model.id);
+    return {
+      id: model.id,
+      api: (model.api as CCHModelApi) ?? "anthropic-messages",
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      reasoning: model.reasoning,
+      input: model.input as string[],
+      sources: annotateModelSources({ model, override }),
+      appliedKey,
+    };
+  });
+  return rows.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Render a table row's compact text line (used in the scrollable list). */
+export function formatModelTableRow(
+  row: ModelTableRow,
+  showSources: boolean = true
+): string {
+  const overrideMark = row.appliedKey ? ` [${row.appliedKey}]` : "";
+  const sourceMark =
+    showSources && Object.keys(row.sources).length > 0
+      ? ` (${Object.keys(row.sources).join(", ")})`
+      : "";
+  return (
+    `${row.id}${overrideMark}${sourceMark} | ${row.api} | ctx ${row.contextWindow} | ` +
+    `max ${row.maxTokens} | ${row.reasoning ? "reasoning" : "plain"} | ${row.input.join("+")} | ${row.name}`
+  );
+}
+
 export default async function claudeCodeHubExtension(pi: ExtensionAPI): Promise<void> {
   const config = readConfig();
   const builtinProviderIds = new Set(getProviders() as unknown as string[]);
@@ -1110,4 +1300,384 @@ export default async function claudeCodeHubExtension(pi: ExtensionAPI): Promise<
       ctx.ui.notify(`Claude Code Hub providers (${names.length}):\n${lines.join("\n")}`, "info");
     },
   });
+
+  pi.registerCommand("cch-provider-models", {
+    description: "Show effective model parameters for a CCH provider (Enter: edit)",
+    handler: async (args, ctx) => {
+      const current = readConfig();
+      const names = Object.keys(current.providers);
+      if (names.length === 0) {
+        ctx.ui.notify("No providers configured. Run /cch-provider-add.", "info");
+        return;
+      }
+
+      let name = args.trim();
+      if (!name) {
+        const selected = await ctx.ui.select("Provider", names);
+        if (selected === undefined) return;
+        name = selected;
+      }
+      const entry = current.providers[name];
+      if (!entry) {
+        ctx.ui.notify(`Provider "${name}" is not configured.`, "error");
+        return;
+      }
+
+      const provider = ctx.modelRegistry.getProvider(name);
+      const registryModels = [...(provider?.getModels() ?? [])] as ProviderModelConfig[];
+      if (registryModels.length === 0) {
+        ctx.ui.notify(
+          `Provider "${name}" has no models yet. Open /model or /login ${name} to refresh them first.`,
+          "info"
+        );
+        return;
+      }
+
+      const rows = buildModelTableRows({
+        registryModels,
+        modelOverrides: entry.modelOverrides,
+      });
+
+      if (ctx.mode !== "tui" || !ctx.hasUI) {
+        ctx.ui.notify(
+          `CCH models for ${name} (${rows.length}):\n` +
+            rows.map((row) => formatModelTableRow(row)).join("\n"),
+          "info"
+        );
+        return;
+      }
+
+      const items: SelectItem[] = rows.map((row) => ({
+        value: row.id,
+        label: row.id,
+        description: formatModelTableRow(row),
+      }));
+
+      const selectedId = await ctx.ui.custom<string | null>((_tui, theme, _kb, done) => {
+        const container = new Container();
+        container.addChild(
+          new Text(theme.fg("accent", theme.bold(`CCH models for ${name} (${rows.length})`)), 1, 0)
+        );
+        const list = new SelectList(items, Math.min(items.length, 12), getSelectListTheme());
+        list.onSelect = (item: SelectItem) => done(item.value);
+        list.onCancel = () => done(null);
+        container.addChild(list);
+        container.addChild(
+          new Text(theme.fg("dim", "type to filter • enter: edit model • esc: back"), 1, 0)
+        );
+        return {
+          render: (w) => container.render(w),
+          invalidate: () => container.invalidate(),
+          handleInput: (data) => {
+            list.handleInput(data);
+          },
+        };
+      });
+
+      if (selectedId !== null && selectedId !== undefined) {
+        await runOverrideEditor(name, selectedId, ctx);
+      }
+    },
+  });
+
+  pi.registerCommand("cch-model-override", {
+    description: "Edit model overrides for a CCH provider (model ID or pattern)",
+    handler: async (args, ctx) => {
+      const current = readConfig();
+      const names = Object.keys(current.providers);
+      if (names.length === 0) {
+        ctx.ui.notify("No providers configured. Run /cch-provider-add.", "info");
+        return;
+      }
+
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      let name = parts[0] ?? "";
+      let modelKey = parts.slice(1).join(" ") ?? "";
+      if (!name) {
+        const selected = await ctx.ui.select("Provider", names);
+        if (selected === undefined) return;
+        name = selected;
+      }
+      if (!current.providers[name]) {
+        ctx.ui.notify(`Provider "${name}" is not configured.`, "error");
+        return;
+      }
+
+      const provider = ctx.modelRegistry.getProvider(name);
+      const registryModels = [...(provider?.getModels() ?? [])] as ProviderModelConfig[];
+      if (!modelKey) {
+        if (registryModels.length === 0) {
+          ctx.ui.notify(
+            `Provider "${name}" has no models yet; pass a model ID or pattern as the second argument.`,
+            "info"
+          );
+          return;
+        }
+        const selected = await ctx.ui.select(
+          "Model or pattern",
+          registryModels.map((m) => m.id)
+        );
+        if (selected === undefined) return;
+        modelKey = selected;
+      }
+
+      await runOverrideEditor(name, modelKey, ctx);
+    },
+  });
+}
+
+async function runOverrideEditor(
+  providerName: string,
+  modelKey: string,
+  ctx: ExtensionCommandContext
+): Promise<void> {
+  const current = readConfig();
+  const entry = current.providers[providerName];
+  if (!entry) {
+    ctx.ui.notify(`Provider "${providerName}" is not configured.`, "error");
+    return;
+  }
+
+  const isPattern = modelKey.includes("*") || modelKey.includes("?");
+  let override = { ...(entry.modelOverrides[modelKey] ?? {}) };
+
+  if (ctx.mode !== "tui" || !ctx.hasUI) {
+    // Fallback: prompt each basic field via input dialogs.
+    const updated = await runOverrideEditorFallback(modelKey, override, ctx);
+    if (updated === undefined) return;
+    override = updated;
+    await persistOverride(providerName, modelKey, override, ctx);
+    return;
+  }
+
+  const result = await showOverrideForm({
+    providerName,
+    modelKey,
+    isPattern,
+    override,
+    ctx,
+  });
+  if (!result) return;
+  if (result.action === "clear") {
+    await persistOverride(providerName, modelKey, {}, ctx);
+    return;
+  }
+  await persistOverride(providerName, modelKey, result.override ?? {}, ctx);
+}
+
+async function runOverrideEditorFallback(
+  modelKey: string,
+  override: CCHModelOverride,
+  ctx: ExtensionCommandContext
+): Promise<CCHModelOverride | undefined> {
+  for (const field of OVERRIDE_FIELDS) {
+    if (!isBasicField(field)) continue;
+    const currentValue = serializeOverrideField(field, override);
+    const raw = await ctx.ui.input(
+      `${OVERRIDE_FIELD_LABELS[field]} (${modelKey}) — empty to keep, "-" to clear`,
+      currentValue
+    );
+    if (raw === undefined) return undefined;
+    const trimmed = raw.trim();
+    if (trimmed === "" || trimmed === currentValue) continue;
+    if (trimmed === "-") {
+      override = setOverrideField(override, field, undefined);
+      continue;
+    }
+    const parsed = parseOverrideFieldText(field, trimmed);
+    if (parsed.error) {
+      ctx.ui.notify(parsed.error, "error");
+      return undefined;
+    }
+    override = setOverrideField(override, field, parsed.value);
+  }
+  return override;
+}
+
+function parseOverrideFieldText(
+  field: OverrideField,
+  text: string
+): { value: unknown; error?: string } {
+  switch (field) {
+    case "name":
+      return { value: text };
+    case "contextWindow":
+    case "maxTokens": {
+      const number = Number(text);
+      if (!Number.isFinite(number) || number <= 0) {
+        return { value: undefined, error: `${OVERRIDE_FIELD_LABELS[field]} must be a positive number.` };
+      }
+      return { value: number };
+    }
+    case "reasoning":
+      if (text === "true" || text === "on" || text === "1") return { value: true };
+      if (text === "false" || text === "off" || text === "0") return { value: false };
+      return { value: undefined, error: "Reasoning must be true, false, on or off." };
+    case "input": {
+      const values = text
+        .split(",")
+        .map((v) => v.trim())
+        .filter(Boolean);
+      if (!values.every((v) => v === "text" || v === "image")) {
+        return { value: undefined, error: "Input types must be text and/or image (comma separated)." };
+      }
+      return { value: values };
+    }
+    default:
+      return parseOverrideJson(field, text);
+  }
+}
+
+async function persistOverride(
+  providerName: string,
+  modelKey: string,
+  override: CCHModelOverride,
+  ctx: ExtensionCommandContext
+): Promise<void> {
+  const isEmpty = Object.keys(override).length === 0;
+  await updateConfig((next) => {
+    const entry = next.providers[providerName];
+    if (!entry) return false;
+    if (isEmpty) {
+      delete entry.modelOverrides[modelKey];
+    } else {
+      entry.modelOverrides[modelKey] = override;
+    }
+    return true;
+  });
+  ctx.ui.notify(
+    isEmpty
+      ? `Cleared override for ${modelKey} (${providerName}).`
+      : `Saved override for ${modelKey} (${providerName}). Model list refreshes on next /model.`,
+    "info"
+  );
+}
+
+async function showOverrideForm(params: {
+  providerName: string;
+  modelKey: string;
+  isPattern: boolean;
+  override: CCHModelOverride;
+  ctx: ExtensionCommandContext;
+}): Promise<{ action: "save" | "clear" | "cancel"; override?: CCHModelOverride } | undefined> {
+  const { providerName, modelKey, isPattern, ctx } = params;
+  let override = { ...params.override };
+  const basicFields = OVERRIDE_FIELDS.filter((field) => isBasicField(field));
+  const advancedFields = OVERRIDE_FIELDS.filter((field) => !isBasicField(field));
+
+  type FormResult =
+    | { kind: "action"; action: "save" | "clear" | "cancel" }
+    | { kind: "field"; field: OverrideField }
+    | { kind: "advanced" };
+
+  while (true) {
+    const hasAdvancedValues = advancedFields.some((field) => override[field] !== undefined);
+    const listItems: SelectItem[] = [
+      ...basicFields.map((field) => ({
+        value: `field:${field}`,
+        label: OVERRIDE_FIELD_LABELS[field],
+        description: serializeOverrideField(field, override),
+      })),
+      {
+        value: "__advanced__",
+        label: hasAdvancedValues ? "Advanced (edited)" : "Advanced",
+        description: `cost, thinkingLevelMap, compat${hasAdvancedValues ? " — set" : ""}`,
+      },
+      { value: "__save__", label: "Save", description: "Write override to config" },
+      { value: "__clear__", label: "Clear override", description: "Remove this entry" },
+      { value: "__cancel__", label: "Cancel", description: "Discard changes" },
+    ];
+
+    const result = await ctx.ui.custom<FormResult | undefined>((_tui, theme, _kb, done) => {
+      const container = new Container();
+      container.addChild(
+        new Text(
+          theme.fg(
+            "accent",
+            theme.bold(
+              `Override ${modelKey} (${providerName})${isPattern ? " [pattern]" : ""}`
+            )
+          ),
+          1,
+          0
+        )
+      );
+      const list = new SelectList(
+        listItems,
+        Math.min(listItems.length, 14),
+        getSelectListTheme()
+      );
+      list.onSelect = (item: SelectItem) => {
+        if (item.value.startsWith("field:")) {
+          done({ kind: "field", field: item.value.slice("field:".length) as OverrideField });
+        } else if (item.value === "__advanced__") {
+          done({ kind: "advanced" });
+        } else if (item.value === "__save__") {
+          done({ kind: "action", action: "save" });
+        } else if (item.value === "__clear__") {
+          done({ kind: "action", action: "clear" });
+        } else {
+          done({ kind: "action", action: "cancel" });
+        }
+      };
+      list.onCancel = () => done({ kind: "action", action: "cancel" });
+      container.addChild(list);
+      container.addChild(
+        new Text(theme.fg("dim", "↑↓ navigate • enter edit/save • esc cancel"), 1, 0)
+      );
+      return {
+        render: (w) => container.render(w),
+        invalidate: () => container.invalidate(),
+        handleInput: (data) => {
+          list.handleInput(data);
+        },
+      };
+    });
+
+    if (!result) return undefined; // cancelled at TUI level
+    if (result.kind === "action") {
+      if (result.action === "save") return { action: "save", override };
+      if (result.action === "clear") return { action: "clear" };
+      return { action: "cancel" };
+    }
+
+    // Pick the field to edit: advanced opens a sub-menu.
+    let field: OverrideField;
+    if (result.kind === "advanced") {
+      const chosen = await ctx.ui.select(
+        "Advanced field",
+        advancedFields.map((f) => `${OVERRIDE_FIELD_LABELS[f]}: ${serializeOverrideField(f, override)}`)
+      );
+      if (chosen === undefined) continue;
+      const index = advancedFields.findIndex((f) =>
+        chosen.startsWith(OVERRIDE_FIELD_LABELS[f])
+      );
+      if (index === -1) continue;
+      field = advancedFields[index];
+    } else {
+      field = result.field;
+    }
+
+    // Edit the field via a modal input/editor.
+    const current = serializeOverrideField(field, override);
+    const raw = isBasicField(field)
+      ? await ctx.ui.input(`${OVERRIDE_FIELD_LABELS[field]} (${modelKey})`, current)
+      : await ctx.ui.editor(
+          `${OVERRIDE_FIELD_LABELS[field]} JSON (${modelKey}) — {} clears`,
+          current === "(unset)" ? "{}" : current
+        );
+    if (raw === undefined) continue; // user escaped the edit
+    const trimmed = raw.trim();
+    if (trimmed === "" ) continue;
+    if (trimmed === "-" || trimmed === "{}") {
+      override = setOverrideField(override, field, undefined);
+      continue;
+    }
+    const parsed = parseOverrideFieldText(field, trimmed);
+    if (parsed.error) {
+      ctx.ui.notify(parsed.error, "error");
+      continue;
+    }
+    override = setOverrideField(override, field, parsed.value);
+  }
 }

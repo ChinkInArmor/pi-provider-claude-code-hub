@@ -9,13 +9,18 @@ import { getModels } from "@earendil-works/pi-ai/compat";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import {
   buildCCHModels,
+  buildModelTableRows,
   discoverCCHCatalog,
+  formatModelTableRow,
   normalizeCCHBaseUrl,
   parseCCHModelsResponse,
+  parseOverrideJson,
   rebindCachedModels,
   resolveApiBaseUrl,
   resolveModelOverride,
   matchModelPattern,
+  serializeOverrideField,
+  setOverrideField,
 } from "./index.ts";
 
 test("normalizeCCHBaseUrl accepts roots and strips API suffixes", () => {
@@ -492,4 +497,93 @@ test("refreshModels persists via store on the pi-ai 0.83 context", async () => {
   } finally {
     await cleanup();
   }
+});
+
+test("parseOverrideJson validates basic and advanced field values", () => {
+  assert.deepEqual(parseOverrideJson("contextWindow", "200000"), { value: 200000 });
+  assert.equal(parseOverrideJson("contextWindow", "-5").error, "Context window must be a positive number.");
+  assert.deepEqual(parseOverrideJson("reasoning", "true"), { value: true });
+  assert.equal(parseOverrideJson("reasoning", "yes").error, "Invalid JSON for Reasoning.");
+  assert.deepEqual(parseOverrideJson("input", '[\"text\", \"image\"]'), { value: ["text", "image"] });
+  assert.equal(parseOverrideJson("input", '[\"video\"]').error, "Input types must be a JSON array of \"text\" and/or \"image\".");
+  assert.deepEqual(parseOverrideJson("compat", '{\"forceAdaptiveThinking\":true}'), {
+    value: { forceAdaptiveThinking: true },
+  });
+  assert.equal(parseOverrideJson("compat", "[1,2]").error, "Compat must be a JSON object (or null to clear it).");
+  assert.equal(parseOverrideJson("cost", "not json").error, "Invalid JSON for Cost.");
+});
+
+test("serializeOverrideField and setOverrideField round-trip", () => {
+  const override = {
+    name: "Team Model",
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+    reasoning: true,
+    input: ["text", "image"] as ("text" | "image")[],
+    compat: { forceAdaptiveThinking: true },
+  };
+  assert.equal(serializeOverrideField("name", override), "Team Model");
+  assert.equal(serializeOverrideField("contextWindow", override), "200000");
+  assert.equal(serializeOverrideField("reasoning", override), "true");
+  assert.equal(serializeOverrideField("input", override), '[\"text\",\"image\"]');
+  assert.equal(serializeOverrideField("compat", override), '{\"forceAdaptiveThinking\":true}');
+  assert.equal(serializeOverrideField("cost", {}), "(unset)");
+
+  const cleared = setOverrideField(override, "reasoning", undefined);
+  assert.equal(cleared.reasoning, undefined);
+  assert.equal(cleared.name, "Team Model");
+  const changed = setOverrideField(cleared, "maxTokens", 32_000);
+  assert.equal(changed.maxTokens, 32_000);
+});
+
+test("buildModelTableRows annotates override sources and applied keys", () => {
+  const registryModels = [
+    {
+      id: "claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages",
+      baseUrl: "https://hub.example.com",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 64_000,
+    },
+  ] as ProviderModelConfig[];
+  const rows = buildModelTableRows({
+    registryModels,
+    modelOverrides: {
+      "claude-*": { maxTokens: 32_000, reasoning: false },
+      "claude-sonnet-5": { name: "Sonnet Override" },
+    },
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].appliedKey, "claude-sonnet-5");
+  assert.deepEqual(rows[0].sources, { name: "override" });
+  assert.equal(formatModelTableRow(rows[0]).includes("claude-sonnet-5 [claude-sonnet-5]"), true);
+  assert.equal(formatModelTableRow(rows[0]).includes("(name)"), true);
+});
+
+test("buildModelTableRows applies pattern rules when no exact key matches", () => {
+  const registryModels = [
+    {
+      id: "claude-opus-4",
+      name: "Claude Opus 4",
+      api: "anthropic-messages",
+      baseUrl: "https://hub.example.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    },
+  ] as ProviderModelConfig[];
+  const rows = buildModelTableRows({
+    registryModels,
+    modelOverrides: { "claude-*": { maxTokens: 48_000 } },
+  });
+  assert.equal(rows[0].appliedKey, "claude-*");
+  assert.deepEqual(rows[0].sources, { maxTokens: "override" });
+  assert.equal(formatModelTableRow(rows[0]).includes("[claude-*]"), true);
+  assert.equal(formatModelTableRow(rows[0]).includes("(maxTokens)"), true);
 });
