@@ -1,0 +1,44 @@
+name: Publish (npmjs + GitHub Packages)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- 1. 发布到 npmjs.com（主 registry）----
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish to npmjs
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # ---- 2. 发布到 GitHub Packages（镜像）----
+      # GitHub Packages 要求 scoped 包名，且 scope 必须与 GitHub 账号一致，
+      # 因此发布前临时把包名改为 @ChinkInArmor/...（仅 CI 内生效，不影响仓库）
+      - name: Switch name to scoped for GitHub Packages
+        run: npm pkg set name=@ChinkInArmor/pi-provider-claude-code-hub
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://npm.pkg.github.com
+          scope: "@ChinkInArmor"
+
+      - name: Publish to GitHub Packages
+        run: npm publish --registry=https://npm.pkg.github.com
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

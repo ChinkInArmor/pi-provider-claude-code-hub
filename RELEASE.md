@@ -21,11 +21,19 @@ npm pack --dry-run       # 检查发布内容（files: index.ts / README.md / RE
 1. 修改 `index.ts` / `index.test.ts` / README
 2. `npm test` 和 `npm run typecheck` 全部通过
 3. `npm version patch`（或 minor）——**必须升版本**，npm 拒绝重复发布同一版本
-4. `git add -A; git commit -m "..."`，推送 GitHub（HTTPS 偶尔断连，可用 API 方式，见历史会话）
-5. `npm publish --registry=https://registry.npmjs.org`（需要 npm 账号认证；若提示 2FA，需要 OTP 验证码或 bypass 2FA 的 token）
-6. 等待 npmmirror 镜像同步（通常几分钟）
+4. `git add -A; git commit -m "..."`，然后推送提交和 tag：`git push origin main --tags`（HTTPS 偶尔断连，失败可用 API 方式，见历史会话）
+5. 推 tag 触发 `.github/workflows/publish.yml`，GitHub Actions 自动完成双轨发布（npmjs + GitHub Packages），无需手动登录 npm
+6. 等待 Actions 运行完成 + npmmirror 镜像同步（通常几分钟）
 7. 更新 pi 钉住版本：`pi install npm:pi-provider-claude-code-hub@<新版本>`
 8. 验证：`pi -p "Reply exactly OK."` 和 `pi --list-models | Select-String MyCCH`
+
+## 双轨发布（GitHub Actions）
+
+- 发布由 `.github/workflows/publish.yml` 完成：推送 `v*` tag（`npm version patch` 会自动打 tag）时，依次发布到：
+  1. npmjs.com（主，供 `pi install npm:pi-provider-claude-code-hub` 使用，行为不变）
+  2. GitHub Packages（镜像，包名 `@ChinkInArmor/pi-provider-claude-code-hub`，自动关联本仓库）
+- 首次配置：GitHub 仓库 Settings → Secrets and variables → Actions 添加 `NPM_TOKEN`（npmjs.com Access Tokens 中 bypass 2FA 的 publish token）；GitHub Packages 用自动注入的 `GITHUB_TOKEN`，无需配置
+- 发布失败处理：到仓库 Actions 页面看日志。若 npmjs 已发布成功但 GitHub Packages 失败，**不要直接重跑**（npmjs 会因版本重复报错），应 `npm version patch` 升版本后推新 tag，或用 PAT 手动补发 `npm publish --registry=https://npm.pkg.github.com`
 
 ## 真实运行环境（谨慎，不要随意修改）
 
