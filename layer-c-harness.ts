@@ -23,11 +23,16 @@ const { default: claudeCodeHubExtension } = await import("./index.ts");
 
 const commands = new Map();
 const registeredProviders = [];
+const setModelCalls = [];
 const pi = {
   registerProvider(name, config) {
     registeredProviders.push({ name, config });
   },
   unregisterProvider() {},
+  setModel(model) {
+    setModelCalls.push(model);
+    return Promise.resolve(true);
+  },
   registerCommand(name, def) {
     commands.set(name, def);
   },
@@ -40,6 +45,7 @@ for (const name of expected) {
   if (!commands.has(name)) throw new Error(`missing command: ${name}`);
 }
 console.log("commands registered:", [...commands.keys()].join(", "));
+console.log("provider registrations:", registeredProviders.length);
 
 const refreshLog: string[] = [];
 // Non-TUI fallback: mode "print", hasUI false.
@@ -48,10 +54,23 @@ const ctx = {
   hasUI: false,
   cwd: process.cwd(),
   signal: new AbortController().signal,
+  // The active session model (what the user is currently chatting with).
+  model: {
+    id: "claude-opus-4",
+    provider: "MyCCH",
+    name: "Claude Opus 4",
+    api: "anthropic-messages",
+    baseUrl: "https://hub.example.com",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  },
   modelRegistry: {
-    refresh: () => {
-      refreshLog.push("refresh");
-      return Promise.resolve();
+    refresh: (options) => {
+      refreshLog.push(`refresh:${options?.providers?.join(",") ?? "all"}:${options?.allowNetwork ? "net" : "nostore"}`);
+      return Promise.resolve({ aborted: false, errors: new Map() });
     },
     getProvider(name) {
       if (name === "MyCCH") {
@@ -66,7 +85,7 @@ const ctx = {
                 reasoning: true,
                 input: ["text", "image"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 200_000,
+                contextWindow: 256_000,
                 maxTokens: 64_000,
               },
               {
@@ -74,10 +93,11 @@ const ctx = {
                 name: "Claude Opus 4",
                 api: "anthropic-messages",
                 baseUrl: "https://hub.example.com",
-                reasoning: false,
+                provider: "MyCCH",
+                reasoning: true,
                 input: ["text"],
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128_000,
+                contextWindow: 256_000,
                 maxTokens: 16_384,
               },
             ];
@@ -120,7 +140,8 @@ const saved = JSON.parse(
 const override = saved.providers.MyCCH.modelOverrides["claude-opus-4"];
 console.log("saved override:", JSON.stringify(override));
 console.log("refresh calls:", JSON.stringify(refreshLog));
-if (!refreshLog.includes("refresh")) throw new Error("persistOverride did not trigger modelRegistry.refresh");
+console.log("setModel calls:", setModelCalls.map((m) => `${m.id} ctx=${m.contextWindow} r=${m.reasoning}`).join(" | "));
+if (!refreshLog.some((r) => r.startsWith("refresh"))) throw new Error("persistOverride did not trigger modelRegistry.refresh");
 if (override?.contextWindow !== 256000 || override?.reasoning !== true || override?.maxTokens !== undefined) {
   throw new Error("fallback editor did not persist expected override");
 }
@@ -128,6 +149,19 @@ if (override?.contextWindow !== 256000 || override?.reasoning !== true || overri
 if (saved.providers.MyCCH.modelOverrides["claude-*"]?.maxTokens !== 32_000) {
   throw new Error("existing pattern override lost");
 }
+// The active session model must be re-asserted via pi.setModel so the
+// current session picks up the new parameters immediately.
+if (setModelCalls.length !== 1) {
+  throw new Error(`expected 1 setModel call for active session model, got ${setModelCalls.length}`);
+}
+const reModel = setModelCalls[0];
+if (reModel.id !== "claude-opus-4" || reModel.provider !== "MyCCH") {
+  throw new Error("setModel got the wrong model");
+}
+if (reModel.contextWindow !== 256000 || reModel.reasoning !== true) {
+  throw new Error("setModel model does not carry the refreshed parameters");
+}
 console.log("LAYER C HARNESS OK");
 
 rmSync(agentDir, { recursive: true, force: true });
+

@@ -33,6 +33,14 @@ const ONBOARDING_WARN_MAX = 3;
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } as const;
 
+/**
+ * The ExtensionAPI handle from the extension factory. After saving a model
+ * override, the top-level `pi.setModel()` re-binds the active session's model
+ * object reference (AgentSession.setModel -> agent.state.model) so parameter
+ * changes take effect in the current session immediately.
+ */
+let extensionAPI: ExtensionAPI | undefined;
+
 export type CCHModelApi = "anthropic-messages" | "openai-responses" | "openai-completions";
 
 interface EndpointDefinition {
@@ -954,16 +962,20 @@ async function refreshProviderModels(
   }
 }
 
-function registerCCHProvider(pi: ExtensionAPI, name: string, entry: ProviderEntry): void {
-  pi.registerProvider(name, {
+function buildCCHProviderConfig(name: string, entry: ProviderEntry) {
+  return {
     name: `Claude Code Hub (${name})`,
     baseUrl: entry.baseUrl,
-    api: "anthropic-messages",
-    models: [],
-    async refreshModels(context) {
+    api: "anthropic-messages" as const,
+    models: [] as ProviderModelConfig[],
+    async refreshModels(context: RefreshModelsContext): Promise<ProviderModelConfig[]> {
       return refreshProviderModels(name, context);
     },
-  });
+  };
+}
+
+function registerCCHProvider(pi: ExtensionAPI, name: string, entry: ProviderEntry): void {
+  pi.registerProvider(name, buildCCHProviderConfig(name, entry));
 }
 
 function validProviderName(name: string): boolean {
@@ -1138,6 +1150,7 @@ export function formatModelTableRow(
 }
 
 export default async function claudeCodeHubExtension(pi: ExtensionAPI): Promise<void> {
+  extensionAPI = pi;
   const config = readConfig();
   const builtinProviderIds = new Set(getProviders() as unknown as string[]);
   const registered = new Set<string>();
@@ -1600,6 +1613,41 @@ async function persistOverride(
           `Claude Code Hub: provider ${providerName} has no models after refresh; retrying once.`
         );
         refreshed = await doRefresh();
+      }
+    }
+    if (refreshed) {
+      // pi keeps the session's active model as an object reference
+      // (agent.state.model). A targeted registry refresh updates the catalog
+      // but not that reference, so an override saved for the model the user is
+      // currently chatting with only takes effect after switching models away
+      // and back. Re-assert the session model via the top-level setModel with
+      // the freshly refreshed catalog object: pi's AgentSession.setModel swaps
+      // agent.state.model to the new object, so the change applies at once.
+      // This only fires when the active session model belongs to the edited
+      // provider; otherwise the registry refresh alone is enough.
+      if (extensionAPI) {
+        try {
+          const currentModel = ctx.model;
+          if (currentModel?.provider === providerName) {
+            const currentConfig = readConfig();
+            const entry = currentConfig.providers[providerName];
+            if (entry) {
+              const refreshedModel = ctx.modelRegistry
+                .getProvider(providerName)
+                ?.getModels()
+                .find((m) => m.id === currentModel.id);
+              if (refreshedModel) {
+                await extensionAPI.setModel(refreshedModel);
+              }
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `Claude Code Hub: re-assert current session model after save failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        }
       }
     }
   } catch (error) {
